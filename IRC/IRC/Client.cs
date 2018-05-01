@@ -286,6 +286,10 @@ namespace IRC.Client
         public string Target { get; private set; }
         public string Payload { get; private set; }
         public Queue<IRCAction> Queue { get; internal set; }
+        public void Send (IRCAction Packet)
+        {
+            Queue.Enqueue(Packet);
+        }
     }
     
 }

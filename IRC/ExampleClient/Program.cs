@@ -46,7 +46,15 @@ namespace ExampleClient
                     Arguments = new string[] { "daemongqw534igm" }
                 };
 
-                Packet.Queue.Enqueue(Response);
+                Packet.Send(Response);
+
+                IRCAction Response2 = new IRCAction
+                {
+                    Action = "JOIN",
+                    Arguments = new string[] { "##/tmp" }
+                };
+
+                Packet.Send(Response2);
             }
         }
     }
