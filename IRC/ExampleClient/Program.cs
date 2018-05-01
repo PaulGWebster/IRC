@@ -38,7 +38,7 @@ namespace ExampleClient
         {
             if (Packet.Code == 433)
             {
-                Console.WriteLine("Reting another nickname");
+                Console.WriteLine("Trying another nickname");
 
                 IRCAction Response = new IRCAction
                 {

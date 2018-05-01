@@ -48,10 +48,13 @@ namespace IRC.Client
         
         public IRCDisconnect Connect()
         {
+            // We might want to leave this from somewhere else at some point
+            bool RunClient = true;
 
-            while (true) {
+            while (RunClient) {
                 // Resolve the hostnames and relative other information
                 IRCServer IRCServer = SelectServer(IRCConfig.Servers);
+                Queue<string> IRCRX = new Queue<string>();
 
                 // Try to connect
                 try
@@ -65,22 +68,18 @@ namespace IRC.Client
                 }
 
                 // If we got here we are connected (yay)
+                IRCNickname IRCProfile = IRCConfig.Nickname;
                 StreamReader IRCReadStream = new StreamReader(IRCConnection.GetStream());
                 StreamWriter IRCWriteStream = new StreamWriter(IRCConnection.GetStream())
                 {
                     NewLine = "\r\n"
                 };
 
-                String IRCRead = String.Empty;
-                IRCNickname IRCProfile = IRCConfig.Nickname;
-
                 try
                 {
                     IRCWriteStream.WriteLine("USER {0} {1} {2} :{3}", IRCProfile.User, IRCProfile.Mode, "*", IRCProfile.Realname);
                     IRCWriteStream.WriteLine("NICK {0}", IRCProfile.Nickname[(int)IRCStates["NickNameSelect"]]);
                     IRCWriteStream.Flush();
-                    // 100 ms timeouts for reads
-                    IRCReadStream.BaseStream.ReadTimeout = 1800;
                 }
                 catch
                 {
@@ -94,74 +93,76 @@ namespace IRC.Client
                     // We must remain single threaded (fun fun)
                     // what mode are we in
 
+                    // Flip if we are reading or writing
+                    WeRead = !WeRead;
+
+                    // Pull or push from the tcp connection depedant
                     if (WeRead) {
                         try
                         {
                             IRCReadStream.BaseStream.ReadTimeout = 10;
-                            IRCRead = IRCReadStream.ReadLine();
+                            IRCRX.Enqueue(IRCReadStream.ReadLine());
                         }
                         catch
                         {
-                            IRCRead = null;
-                        }
-                        IRCReadStream.BaseStream.ReadTimeout = 1800;
-                        if (IRCRead == null)
-                        {
-                            WeRead = false;
-                            continue;
+                            // Exception somehow may have got disconnected!
                         }
                     }
-                    else 
+                    else if (IRCTXQueue.Count > 0)
                     {
-                        if (!IRCConnection.Connected)
-                        {
-
-                        }
-
-                        // Write opertunity! gotta love serial comms
-                        int MaxSend = 10;
-                        while (IRCTXQueue.Count > 0 && MaxSend-- > 0)
-                        {
-                            IRCWriteStream.WriteLine(IRCTXQueue.Dequeue());
-                        }
+                        IRCWriteStream.WriteLine(IRCTXQueue.Dequeue().ToIRC());
+                        IRCWriteStream.Flush();
                     }
-
-                    Console.WriteLine("RAW: {0}", IRCRead);
-
-                    // Create an IRC Packet
-                    IRCPacket ProcessedPacket = new IRCPacket(IRCRead, Stash);
-
-                    // Some packets we want to handle here without passing onto the client, so lets do it
-                    if (ProcessedPacket.Code == 0)
+                    else
                     {
-                        if (ProcessedPacket.Origin.Equals("PING"))
+                        Thread.Sleep(1);
+                        continue;
+                    }
+
+                    // If we have an array of any size we have at least one line
+                    if (IRCRX.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    // We will ALWAYS have at least 2 items but the last one must always be ignored.
+                    foreach (string IRCRXString in IRCRX) { 
+                        Console.WriteLine("RAW: {0}", IRCRXString);
+
+                        // Create an IRC Packet
+                        IRCPacket ProcessedPacket = new IRCPacket(IRCRXString, Stash)
                         {
-                            // Ping? Pong! event
-                            IRCWriteStream.WriteLine("PONG {0}", ProcessedPacket.Event);
+                            Queue = IRCTXQueue
+                        };
 
-                            // Flush the buffer
-                            IRCWriteStream.Flush();
+                        // Some packets we want to handle here without passing onto the client, so lets do it
+                        if (ProcessedPacket.Code == 0)
+                        {
+                            if (ProcessedPacket.Origin.Equals("PING"))
+                            {
+                                // Ping? Pong! event
+                                IRCWriteStream.WriteLine("PONG {0}", ProcessedPacket.Event);
 
-                            // \
-
-                            continue;
+                                // Flush the buffer
+                                IRCWriteStream.Flush();
+                            }
+                        }
+                        else
+                        {
+                            IRCHandler(ProcessedPacket);
                         }
                     }
 
-                    // Add a reference to the return queue
-                    ProcessedPacket.Queue = IRCTXQueue;
-
-                    // Send the packet back to the client
-                    IRCHandler(ProcessedPacket);
+                    // Reset the RX queue
+                    IRCRX.Clear();
                 }
             }
 
-            /*
             return new IRCDisconnect()
             {
                 Reason = "Lazy developer error"
             };
-            */
+            
         }
 
         private IRCServer SelectServer(IRCServer[] Servers)
@@ -243,17 +244,16 @@ namespace IRC.Client
     {
         public string Action { get; set; }
         public string[] Arguments { get; set; }
+        public string ToIRC()
+        {
+            return Action + " " + String.Join(" ", Arguments);
+        }
     }
     public class IRCPacket
     {
         private string Raw;
         Regex IRCCodeEvent = new Regex(@"^\d\d\d$");
-
-        public IRCPacket()
-        {
-
-        }
-
+        
         public IRCPacket(string RawRead, Object Stash)
         {
             this.Raw = RawRead;
